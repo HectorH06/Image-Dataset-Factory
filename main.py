@@ -3,6 +3,7 @@ import concurrent.futures
 from GoogleImageScraper import GoogleImageScraper
 from patch import webdriver_executable
 
+# Highly recommend using the jupyter instead of this main.py (In theory both work but I tested with the other one, not within this file)
 
 def worker_thread(search_key):
     image_scraper = GoogleImageScraper(
