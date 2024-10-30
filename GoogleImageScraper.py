@@ -14,78 +14,55 @@ import requests
 import io
 from PIL import Image
 import re
+import csv
+import random
+import math
 
 import patch
 
 class GoogleImageScraper():
-    def __init__(self, webdriver_path, image_path, search_key="cat", number_of_images=50, headless=True, min_resolution=(0, 0), max_resolution=(1920, 1080), max_missed=10):
-        #check parameter types
-        image_path = os.path.join(image_path, search_key)
-        if (type(number_of_images)!=int):
+    def __init__(self, webdriver_path, image_path, search_key="cat", number_of_images=10, headless=True, min_resolution=(0, 0), max_resolution=(1920, 1080), max_missed=10, test_split=0.2):
+        self.train_path = os.path.join(image_path, 'train', search_key)
+        self.test_path = os.path.join(image_path, 'test', search_key)
+        self.data_path = os.path.join(image_path, 'data')
+        
+        os.makedirs(self.train_path, exist_ok=True)
+        os.makedirs(self.test_path, exist_ok=True)
+        os.makedirs(self.data_path, exist_ok=True)
+
+        number_of_images *= 6
+        if type(number_of_images) != int:
             print("[Error] Number of images must be integer value.")
             return
-        if not os.path.exists(image_path):
-            print("[INFO] Image path not found. Creating a new folder.")
-            os.makedirs(image_path)
-            
-        #check if chromedriver is installed
-        if (not os.path.isfile(webdriver_path)):
-            is_patched = patch.download_lastest_chromedriver()
-            if (not is_patched):
-                exit("[ERR] Please update the chromedriver.exe in the webdriver folder according to your chrome version:https://chromedriver.chromium.org/downloads")
-        
-        driver = None  # Inicializar driver como None
-        for i in range(1):
-            try:
-                #try going to www.google.com
-                options = Options()
-                if(headless):
-                    options.add_argument('--headless')
-                driver = webdriver.Chrome(service=webdriver.chrome.service.Service(webdriver_path), options=options)
-                driver.set_window_size(1400,1050)
-                driver.get("https://www.google.com")
-                try:
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, 'div[jsname="dTDiAc"]'))
-                except Exception as e:
-                    continue
-            except Exception as e:
-                #update chromedriver
-                pattern = r'(\d+\.\d+\.\d+\.\d+)'
-                version = list(set(re.findall(pattern, str(e))))[0]
-                is_patched = patch.download_lastest_chromedriver(version)
-                if (not is_patched):
-                    exit("[ERR] Please update the chromedriver.exe in the webdriver folder according to your chrome version:https://chromedriver.chromium.org/downloads")
 
-        if driver is None:
-            exit("[ERR] Driver could not be initialized.")
+        if not os.path.isfile(webdriver_path):
+            is_patched = patch.download_lastest_chromedriver()
+            if not is_patched:
+                exit("[ERR] Update the chromedriver.")
+
+        options = Options()
+        if headless:
+            options.add_argument('--headless')
+        self.driver = webdriver.Chrome(service=webdriver.chrome.service.Service(webdriver_path), options=options)
+        self.driver.set_window_size(1400, 1050)
         
-        self.driver = driver
         self.search_key = search_key
         self.number_of_images = number_of_images
-        self.webdriver_path = webdriver_path
         self.image_path = image_path
-        self.url = "https://www.google.com/search?q=%s&source=lnms&tbm=isch&sa=X&ved=2ahUKEwie44_AnqLpAhUhBWMBHUFGD90Q_AUoAXoECBUQAw&biw=1920&bih=947"%(search_key)
+        self.url = f"https://www.google.com/search?q={search_key}&source=lnms&tbm=isch"
         self.headless = headless
         self.min_resolution = min_resolution
         self.max_resolution = max_resolution
         self.max_missed = max_missed
+        self.test_split = test_split
 
     def find_image_urls(self):
-        """
-            This function search and return a list of image urls based on the search key.
-            Example:
-                google_image_scraper = GoogleImageScraper("webdriver_path","image_path","search_key",number_of_photos)
-                image_urls = google_image_scraper.find_image_urls()
-
-        """
         print("[INFO] Gathering image links")
         self.driver.get(self.url)
-        image_urls=[]
-        count = 0
-        missed_count = 0
+        image_urls = []
+        count, missed_count = 0, 0
         time.sleep(2)
-        
-        # Modificar el selector CSS para hacer clic en la primera imagen directamente
+
         try:
             first_image = WebDriverWait(self.driver, 10).until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, 'div[jsname="dTDiAc"]'))
@@ -94,26 +71,23 @@ class GoogleImageScraper():
         except Exception as e:
             print("[ERROR] Couldn't click the first image:", e)
             return image_urls
-        
+
         while self.number_of_images > count and missed_count < self.max_missed:
             try:
-                # Espera un segundo para que la imagen se cargue y luego busca las imágenes
                 time.sleep(1)
-                class_names = ["n3VNCb","iPVvYb","r48jcc","pT0Scc"]
-                images = [self.driver.find_elements(By.CLASS_NAME, class_name) for class_name in class_names if len(self.driver.find_elements(By.CLASS_NAME, class_name)) != 0 ][0]
+                class_names = ["n3VNCb", "iPVvYb", "r48jcc", "pT0Scc"]
+                images = [self.driver.find_elements(By.CLASS_NAME, class_name) for class_name in class_names if self.driver.find_elements(By.CLASS_NAME, class_name)]
+                images = images[0] if images else []
                 for image in images:
-                    # Solo descargar imágenes que comiencen con "http"
                     src_link = image.get_attribute("src")
-                    if(("http" in src_link) and (not "encrypted" in src_link)):
+                    if "http" in src_link and not "encrypted" in src_link:
                         print(f"[INFO] {self.search_key} \t #{count} \t {src_link}")
                         image_urls.append(src_link)
-                        count +=1
+                        count += 1
                         break
             except Exception:
                 print("[INFO] Unable to get link")
-
             try:
-                # Desplazar la página para cargar la siguiente imagen
                 if count % 3 == 0:
                     self.driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ARROW_RIGHT)
                 element = self.driver.find_element(By.CLASS_NAME, "mye4qd")
@@ -127,53 +101,65 @@ class GoogleImageScraper():
         print("[INFO] Google search ended")
         return list(set(image_urls))
 
+    def save_images(self, image_urls, keep_filenames=True):
+        self._save_images_and_log(image_urls, self.train_path, keep_filenames)
 
-    def save_images(self,image_urls, keep_filenames):
-        print(keep_filenames)
-        #save images into file directory
-        """
-            This function takes in an array of image urls and save it into the given image path/directory.
-            Example:
-                google_image_scraper = GoogleImageScraper("webdriver_path","image_path","search_key",number_of_photos)
-                image_urls=["https://example_1.jpg","https://example_2.jpg"]
-                google_image_scraper.save_images(image_urls)
+        all_train_images = os.listdir(self.train_path)
+        num_test_images = math.floor(len(all_train_images) * self.test_split)
+        test_images = random.sample(all_train_images, num_test_images)
 
-        """
-        print("[INFO] Saving image, please wait...")
-        for indx,image_url in enumerate(image_urls):
+        for image_name in test_images:
+            src_path = os.path.join(self.train_path, image_name)
+            dest_path = os.path.join(self.test_path, image_name)
+            os.rename(src_path, dest_path)
+
+        self._append_to_csv(self.train_path, "train_dataset.csv")
+        self._append_to_csv(self.test_path, "test_dataset.csv")
+        print("[INFO] Image saving, splitting, and CSV logging completed.")
+
+    def _save_images_and_log(self, urls, save_path, keep_filenames=True):
+        print(f"[INFO] Saving images to {save_path}...")
+        for indx, image_url in enumerate(urls):
             try:
-                print("[INFO] Image url:%s"%(image_url))
                 search_string = ''.join(e for e in self.search_key if e.isalnum())
-                image = requests.get(image_url,timeout=5)
+                image = requests.get(image_url, timeout=5)
                 if image.status_code == 200:
                     with Image.open(io.BytesIO(image.content)) as image_from_web:
-                        try:
-                            if (keep_filenames):
-                                #extact filename without extension from URL
-                                o = urlparse(image_url)
-                                image_url = o.scheme + "://" + o.netloc + o.path
-                                name = os.path.splitext(os.path.basename(image_url))[0]
-                                #join filename and extension
-                                filename = "%s.%s"%(name,image_from_web.format.lower())
-                            else:
-                                filename = "%s%s.%s"%(search_string,str(indx),image_from_web.format.lower())
+                        # Forzar el formato de archivo a .jpg
+                        if keep_filenames:
+                            o = urlparse(image_url)
+                            image_url = o.scheme + "://" + o.netloc + o.path
+                            name = os.path.splitext(os.path.basename(image_url))[0]
+                            filename = f"{name}.jpg"
+                        else:
+                            filename = f"{search_string}{indx}.jpg"
 
-                            image_path = os.path.join(self.image_path, filename)
-                            print(
-                                f"[INFO] {self.search_key} \t {indx} \t Image saved at: {image_path}")
-                            image_from_web.save(image_path)
-                        except OSError:
-                            rgb_im = image_from_web.convert('RGB')
-                            rgb_im.save(image_path)
+                        image_path = os.path.join(save_path, filename)
+                        image_from_web = image_from_web.convert("RGB")  # Convertir a RGB para asegurar el formato .jpg
+                        image_from_web.save(image_path, "JPEG")
                         image_resolution = image_from_web.size
-                        if image_resolution != None:
-                            if image_resolution[0]<self.min_resolution[0] or image_resolution[1]<self.min_resolution[1] or image_resolution[0]>self.max_resolution[0] or image_resolution[1]>self.max_resolution[1]:
-                                image_from_web.close()
-                                os.remove(image_path)
-
+                        if (image_resolution[0] < self.min_resolution[0] or
+                            image_resolution[1] < self.min_resolution[1] or
+                            image_resolution[0] > self.max_resolution[0] or
+                            image_resolution[1] > self.max_resolution[1]):
+                            image_from_web.close()
+                            os.remove(image_path)
                         image_from_web.close()
             except Exception as e:
-                print("[ERROR] Download failed: ",e)
+                print("[ERROR] Download failed: ", e)
                 pass
-        print("--------------------------------------------------")
-        print("[INFO] Downloads completed. Please note that some photos were not downloaded as they were not in the correct format (e.g. jpg, jpeg, png)")
+        print(f"[INFO] Downloads to {save_path} completed.")
+
+    def _append_to_csv(self, directory, csv_file):
+        csv_path = os.path.join(self.data_path, csv_file)
+        print(f"[INFO] Appending to CSV file {csv_path}...")
+        
+        with open(csv_path, mode='a', newline='') as file:
+            writer = csv.writer(file)
+            if os.stat(csv_path).st_size == 0:
+                writer.writerow(["filename", "target"])  # Escribir encabezado solo si el archivo está vacío
+
+            for filename in os.listdir(directory):
+                writer.writerow([filename, self.search_key])
+        
+        print(f"[INFO] Data appended to CSV file {csv_path}.")
